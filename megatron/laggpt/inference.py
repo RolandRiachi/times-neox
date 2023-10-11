@@ -93,7 +93,8 @@ def initialize():
 def process_batch(model, times_envelope, gen_iterator, prediction_length):
     
     data_nodes = (model.is_first_stage() or model.is_last_stage())
-    pipe_rank_shift = (mpu.get_pipe_parallel_world_size() - 1) * mpu.get_model_parallel_world_size() * mpu.get_data_parallel_world_size()
+    pipe_parallel_world_size = mpu.get_pipe_parallel_world_size()
+    pipe_rank_shift = (pipe_parallel_world_size - 1) * pipe_parallel_world_size * mpu.get_data_parallel_world_size()
 
     if data_nodes:
         gen_iterator.start_new_seq()
@@ -112,8 +113,9 @@ def process_batch(model, times_envelope, gen_iterator, prediction_length):
             last_column = [i[:, -1:, ...] for i in outputs]
             loc, scale = gen_iterator.loc, gen_iterator.scale
             new_vals = times_envelope.get_greedy_val(last_column, loc, scale)
-            torch.distributed.send(new_vals, torch.distributed.get_rank() - pipe_rank_shift)
-        if model.is_first_stage():
+            if pipe_parallel_world_size > 1:
+                torch.distributed.send(new_vals, torch.distributed.get_rank() - pipe_rank_shift)
+        if pipe_parallel_world_size > 1 and model.is_first_stage():
             new_vals = torch.empty((gen_iterator.get_batch_size(), 1), dtype = torch.float32, device = gen_iterator.get_batch_device())
             torch.distributed.recv(new_vals, torch.distributed.get_rank() + pipe_rank_shift)
 
